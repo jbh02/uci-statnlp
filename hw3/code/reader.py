@@ -3,6 +3,7 @@ from typing import List, Tuple, Union
 
 import numpy as np
 import torch
+import re
 
 
 class Reader:
@@ -54,7 +55,9 @@ class Reader:
             # You should return the text of the candidate answer whose score is
             # the largest.
             # ---------------------------------------------------------------------
-            raise NotImplementedError(f"To be updated by the student: {self.mode}")
+            scores = [a.score for a in candidate_answers]
+            index = scores.index(max(scores))
+            cand = candidate_answers[index].text
             # ---------------------------------------------------------------------
             # Don't change anything below this point (: You've done enough!
             # Keep up with the good work buddy!
@@ -80,7 +83,7 @@ class Reader:
         documents = [documents] if isinstance(documents, str) else documents
         return [Answer(d.split(".")[0], 1) for d in documents]
 
-    def find_answer(self, queries: str, documents: List[List[str]]) -> List[str]:
+    def find_answer(self, queries: List[str], documents: List[List[str]]) -> List[str]:
         """Given a set of relevant documents return the answer
         that better fits the queries."""
         answers = []
@@ -183,8 +186,9 @@ class SpanReader(Reader):
                 max_length=self.max_length,
             )
             encoding = {k: v.to(self.device) for k, v in encoding.items()}
-            # print(encoding["input_ids"].shape) # HELPS DEBUGGING :3
+            print(encoding["input_ids"].shape) # HELPS DEBUGGING :3
             # Input tokens will later be useful to convert the ids back to strings
+
             tokens = [
                 self.tokenizer.convert_ids_to_tokens(enc)
                 for enc in encoding["input_ids"]
@@ -261,10 +265,61 @@ class GenerativeQAReader(Reader):
     answer may not be directly present in the provided document.
     """
 
-    def __init__(self, **kwargs):
-        pass
+    def __init__(self, model_name: str = "allenai/unifiedqa-t5-small", device: str = "cpu", max_length: int = 512, **kwargs):
+        super().__init__(**kwargs)
+
+        from transformers import T5Tokenizer, T5ForConditionalGeneration
+
+        self.model_name = model_name
+        # Load the model
+        self.model = T5ForConditionalGeneration.from_pretrained(model_name)
+        # Load the tokenizer
+        self.tokenizer = T5Tokenizer.from_pretrained(model_name)
+        self.device = device
+
+        self.model.eval()
+        self.model.to(device)
+        self.max_length = max_length
 
     def _find_candidates(
         self, query: str, documents: Union[str, List[str]]
     ) -> List[Answer]:
-        pass
+        
+        def preprocess(text):
+            text = text.lower()
+            text = re.sub(r"[']", "", text)
+            return text
+            
+        def _batch_find(query_doc_pairs: Tuple[str, str]) -> List[Answer]:
+            encoding = self.tokenizer.batch_encode_plus(
+                query_doc_pairs,
+                return_tensors="pt",
+                truncation=True,
+                padding=True,
+                max_length=self.max_length,
+            )
+            encoding = {k: v.to(self.device) for k, v in encoding.items()}
+            
+            outputs = self.model.generate(**encoding, output_scores=True, return_dict_in_generate=True)
+            print(outputs)
+            decoded = self.tokenizer.batch_decode(outputs.sequences, num_samples=1, do_sample=False, skip_special_tokens=True)
+            print(decoded)
+            
+            transition_scores = self.model.compute_transition_scores(outputs.sequences, outputs.scores, normalize_logits=True)
+
+            probabilities = torch.exp(transition_scores.sum(axis=1)).numpy()
+
+            answers = []
+            for ans, prob in zip(decoded, probabilities):
+                answers.append(Answer(ans, prob))
+            return answers
+
+        query_doc_pairs = [preprocess(query + " \\n " + d) for d in documents]
+
+        results = []
+        for start in range(0, len(query_doc_pairs), self.batch_size):
+            batch = query_doc_pairs[start : start + self.batch_size]
+            out = _batch_find(batch)
+            results.extend(out)
+
+        return results

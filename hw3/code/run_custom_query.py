@@ -83,7 +83,7 @@ if __name__ == "__main__":
     results = []
     for query in tqdm.tqdm(queries):
         retr_docs, retr_scores = retriever.retrieve(query, args.k)
-        answer = reader.find_answer(query, retr_docs)
+        answer = reader.find_answer([query], retr_docs)
 
         results.append(
             {
