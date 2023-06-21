@@ -1,0 +1,8 @@
+{
+    "type": "retriever.SentenceEncRetriever",
+    "tokenizer": "nltk-punct",
+    "model_name": "sentence-transformers/bert-base-nli-mean-tokens",
+    "model_name2": "sentence-transformers/all-mpnet-base-v2",
+    "embedding_dim": 768,
+    "index_path": "../results/sent_encoder.faiss.index"
+}

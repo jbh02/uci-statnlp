@@ -1,3 +1,4 @@
+from distutils.errors import PreprocessError
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
@@ -7,7 +8,7 @@ from utils import load_embeddings_from_filepath
 
 import faiss  # useful for building fast indices
 import numpy as np
-import os, requests, warnings
+import os, requests, warnings, re
 
 
 class Retriever:
@@ -358,11 +359,65 @@ class SentenceEncRetriever(FaissIndexMixin, Retriever):
     [1] https://towardsdatascience.com/master-semantic-search-at-scale-index-millions-of-documents-with-lightning-fast-inference-times-fa395e4efd88
     """
 
-    def __init__(self, **kwargs):
-        pass
+    def __init__(self, model_name, model_name2=None, **kwargs):
 
-    def encode_queries(self, queries: Union[str, List[str]]) -> np.array:
-        pass
+        # used for both single and double encoder use-cases
+        self.doc_model = SentenceTransformer(model_name)
+        
+        if model_name2 is not None:
+            print("Loading query model")
+            self.query_model = SentenceTransformer(model_name2)
+        else:
+            self.query_model = self.doc_model
+
+        super().__init__(**kwargs)
+
+    def encode_queries(self, queries: Union[str, List[str]], model: SentenceTransformer = None) -> np.array:
+        
+        def preprocess(text):
+            text = text.lower()
+            text = re.sub(r"[']", "", text)
+            return text
+        
+        if model is None:
+            model = self.query_model
+  
+        queries = [queries] if isinstance(queries, str) else queries
+
+        embeddings = [model.encode(preprocess(q)) for q in queries]
+        embeddings = np.vstack(embeddings)
+        print(embeddings.shape)
+
+
+        '''
+        # averaging out the embedding of each individual token as described above
+        # break down the queries into lists of individual tokens
+        vect_queries = [self.tokenizer(q) for q in queries]
+
+        
+
+        avg_embeddings = []
+        for query in vect_queries:
+            # retrieve the embeddings associated with each word in the query
+            embs = [model.encode(tk) for tk in query]
+
+            if len(embs) == 0:
+                warnings.warn(
+                    f"Query {query} has no generated embeddings."
+                    f"Assigning uniform embedding by default..."
+                )
+                embs = np.ones_like((1, self.embedding_dim))
+            else:
+                embs = np.vstack(embs)
+
+            avg_emb = np.mean(embs, axis=0).reshape(-1, self.embedding_dim)
+            avg_emb_norm = np.linalg.norm(avg_emb, axis=1)
+            avg_embeddings.append(avg_emb / avg_emb_norm[:, None])
+        
+        avg_embeddings = np.vstack(avg_embeddings)
+        '''
+        return embeddings
 
     def encode_documents(self, documents: str) -> np.array:
-        pass
+            return self.encode_queries(documents, self.doc_model)
+
